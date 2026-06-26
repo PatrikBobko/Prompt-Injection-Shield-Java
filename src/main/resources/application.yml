@@ -1,6 +1,9 @@
 spring:
   application:
     name: prompt-injection-shield-service
+  jackson:
+    # Keep the JSON report tidy: omit null offsets, decoded payloads, etc.
+    default-property-inclusion: non_null
 
 server:
   port: 8080
