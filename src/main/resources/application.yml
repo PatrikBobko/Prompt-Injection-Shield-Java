@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: prompt-injection-shield-service
+
+server:
+  port: 8080
+  # Cap request body size: the scanner accepts whole pages, but reject anything
+  # unreasonable up front rather than parsing megabytes of hostile HTML.
+  tomcat:
+    max-http-form-post-size: 4MB
+    max-swallow-size: 4MB
+
+logging:
+  level:
+    com.promptshield: INFO
