@@ -1,0 +1,27 @@
+# Version control and local tooling
+.git/
+.github/
+.idea/
+.vscode/
+
+# Build products and transient local files
+target/
+build/
+out/
+tmp/
+output/
+*.log
+*.tmp
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Documentation and editor cruft are not needed to build the application image.
+README.md
+*.iml
+*.swp
+*.swo
+Thumbs.db
+.DS_Store

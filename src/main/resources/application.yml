@@ -21,9 +21,12 @@ spring:
     redis:
       repositories:
         enabled: false
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
 
 server:
   port: 8080
+  shutdown: graceful
   # Form/swallow limits complement the streaming JSON body filter configured
   # below; neither setting alone limits arbitrary JSON request bodies.
   tomcat:

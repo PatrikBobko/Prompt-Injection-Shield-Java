@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Prompt Injection Shield
+    orgId: 1
+    folder: Prompt Injection Shield
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
