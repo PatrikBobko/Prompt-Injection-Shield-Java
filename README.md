@@ -68,11 +68,25 @@ ScanRequest
 ## Tech stack
 
 - **Java 21** (LTS)
-- **Spring Boot 3.3.5** (`spring-boot-starter-web`, `spring-boot-starter-validation`)
+- **Spring Boot 3.3.5**: Web, Validation, Actuator, Data JPA, Security, OAuth2
+  Resource Server, and Redis
 - **jsoup 1.18.1** for HTML parsing
+- **PostgreSQL + Spring Data JPA/Hibernate**, with versioned schema migrations
+  through **Flyway**; H2 keeps the default local run self-contained
+- **Keycloak + OAuth2/JWT RBAC** for the Compose deployment, using `scan` and
+  `admin` realm roles
+- **Redis** for the shared production-style scan-rate-limit backend
+- **Docker + Docker Compose**: a multi-stage image, non-root runtime user, and
+  a local stack with PostgreSQL, Redis, and Keycloak
+- **Spring Boot Actuator + Micrometer + Prometheus + Grafana**, with
+  OpenTelemetry/OTLP tracing support and correlation IDs in logs/responses
+- **springdoc-openapi** for generated OpenAPI 3 documentation and Swagger UI
 - **Maven** (with wrapper) — chosen for being the Spring Initializr default,
   ubiquitous, fully declarative, and readable without DSL knowledge
-- JUnit 5 + AssertJ + Spring MockMvc for tests
+- **JUnit 5 + AssertJ + Spring MockMvc**, plus **Testcontainers** PostgreSQL
+  integration tests
+- **GitHub Actions**, **JaCoCo**, and a **CycloneDX SBOM** for continuous
+  verification
 
 ## Build & run
 
@@ -81,6 +95,10 @@ The Maven Wrapper means you only need a JDK 21 on the `PATH` (or `JAVA_HOME`).
 ```bash
 # run the test suite
 ./mvnw test
+
+# run unit tests, PostgreSQL integration tests when Docker is available,
+# coverage reporting, and SBOM generation
+./mvnw verify
 
 # run the service (defaults to port 8080)
 ./mvnw spring-boot:run
@@ -92,7 +110,80 @@ java -jar target/prompt-injection-shield-service-0.1.0.jar
 
 On Windows use `mvnw.cmd` instead of `./mvnw`.
 
+The default local profile uses an in-memory H2 database, Flyway migrations, and
+an in-memory rate limiter. It deliberately leaves API authentication off to
+keep detector development and focused tests frictionless; use the Compose stack
+when exercising the protected deployment flow.
+
+### Production-style Docker Compose stack
+
+The repository includes a multi-stage `Dockerfile` and a Compose stack that
+starts the API with PostgreSQL, Redis, and Keycloak. The runtime image contains
+only the JRE and application jar, runs as a non-root user, and the Compose app
+uses a read-only filesystem, dropped Linux capabilities, a temporary `/tmp`,
+and resource limits.
+
+```bash
+# PowerShell: Copy-Item .env.example .env
+cp .env.example .env
+
+# API, PostgreSQL, Redis, and Keycloak
+docker compose up --build -d
+
+# Include the provisioned Prometheus and Grafana services
+docker compose --profile observability up --build -d
+```
+
+All published Compose ports bind to `127.0.0.1`; PostgreSQL and Redis stay on
+the internal Compose network. Keycloak runs in `start-dev` mode and imports a
+local-development realm, so it is deliberately a developer convenience rather
+than a production identity-provider configuration. The included `.env.example`
+and demo realm credentials are not deployable secrets; replace them before
+exposing any service beyond your machine.
+
+| Service | Local address | Purpose |
+|---|---|---|
+| API | `http://localhost:8080` | Protected scanner, audit history, health, and metrics |
+| Keycloak | `http://localhost:8081` | Local OAuth2/OIDC issuer and development realm |
+| Prometheus | `http://localhost:9090` | Optional `observability` profile metrics UI |
+| Grafana | `http://localhost:3000` | Optional provisioned dashboard |
+
 ## API
+
+### Authentication, authorization, and rate limits
+
+When the default local profile is running, the API is intentionally open. The
+Compose deployment sets `APP_SECURITY_ENABLED=true` and acts as a stateless
+OAuth2 resource server. `POST /api/v1/scan` and `GET /api/v1/scans` then
+require a Keycloak-issued bearer JWT with the `scan` or `admin` realm role. The
+API validates the Keycloak issuer and the `promptshield-api` audience; Keycloak
+realm roles are mapped to Spring Security `ROLE_*` authorities.
+
+Compose starts Keycloak in `start-dev` mode and imports a local-only
+`promptshield` realm with a `promptshield-cli` public client and a `demo` user.
+To get a development token after the stack is ready (requires `curl` and `jq`):
+
+```bash
+TOKEN=$(curl --fail --silent --show-error \
+  --request POST http://localhost:8081/realms/promptshield/protocol/openid-connect/token \
+  --data-urlencode grant_type=password \
+  --data-urlencode client_id=promptshield-cli \
+  --data-urlencode username=demo \
+  --data-urlencode password=demo-password-change-me \
+  | jq --raw-output .access_token)
+```
+
+Pass `-H "Authorization: Bearer $TOKEN"` with protected requests. The demo
+account, client, and password are intentionally development-only and must not
+be carried into a real environment.
+
+Only `POST /api/v1/scan` is rate limited. The local profile uses an in-memory
+token bucket; Compose uses a Redis fixed-window implementation. The default is
+60 requests per minute, keyed by the authenticated subject after JWT
+authentication (or by the direct peer address locally). It returns
+`X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `Retry-After` headers and a
+`429` response when exhausted. The limiter deliberately does not trust a
+client-provided `X-Forwarded-For` header.
 
 ### `POST /api/v1/scan`
 
@@ -139,11 +230,98 @@ Returns a `RiskReport`:
 `overallSeverity` is omitted when the page is clean. Null fields (offsets,
 decoded payloads) are omitted from the JSON.
 
+In the Compose stack, include the bearer token from the previous section:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/scan \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{ "contentType": "TEXT", "content": "This is a normal paragraph." }'
+```
+
+### `GET /api/v1/scans`
+
+Returns the current caller's paginated scan history, newest first. It is
+protected by the same `scan`/`admin` roles in the Compose deployment.
+
+```bash
+curl -s "http://localhost:8080/api/v1/scans?page=0&size=20" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### OpenAPI and operational endpoints
+
+The generated OpenAPI document and Swagger UI are available without a bearer
+token:
+
+- `GET /v3/api-docs`
+- `GET /swagger-ui/index.html`
+
+Spring Boot Actuator also exposes the public operational endpoints below. The
+Compose health check uses `/actuator/health`; liveness and readiness probes are
+enabled as health groups.
+
+- `GET /actuator/health`
+- `GET /actuator/health/liveness`
+- `GET /actuator/health/readiness`
+- `GET /actuator/info`
+- `GET /actuator/prometheus`
+
 ### `GET /api/v1/health`
 
 ```json
 { "status": "UP" }
 ```
+
+`/api/v1/health` is retained as a lightweight compatibility endpoint. Prefer
+Actuator health endpoints for container and orchestration probes.
+
+## Audit history and privacy policy
+
+Every successful scan creates an immutable audit record through Spring Data JPA
+and Flyway's `V1__create_scan_audit_tables.sql` migration. In the protected
+Compose flow, records are scoped to the authenticated subject, and
+`GET /api/v1/scans` never returns another caller's history.
+
+The audit store deliberately retains only:
+
+- the scan timestamp, content type, segment count, risk score, severity counts,
+  and aggregate finding metadata;
+- a keyed HMAC-SHA-256 fingerprint of the submitted content, derived from
+  `APP_AUDIT_FINGERPRINT_KEY`, for correlation and duplicate investigations; and
+- each finding's ID, severity, channel, and detector IDs.
+
+It never persists or returns submitted HTML/text, report snippets, CSS
+locators, human-readable reasons, or detector evidence. The keyed fingerprint
+is a correlation identifier rather than encrypted data or an access-control
+mechanism. It prevents practical precomputation without the deployment secret,
+but a deployment should still use appropriate database access controls, backup
+policy, and a retention/deletion schedule.
+
+## Observability and delivery
+
+Actuator and Micrometer publish standard HTTP/JVM metrics plus privacy-safe
+scan outcome, finding, and latency metrics. Request bodies, client identities,
+and submitted text are never used as metric tags. The optional Compose
+observability profile provisions Prometheus to scrape
+`/actuator/prometheus` and Grafana with a Prompt Injection Shield dashboard.
+The service also accepts or generates a constrained `X-Correlation-Id`, returns
+it in the response, and places it in the log MDC for request correlation. Add
+the `json-logs` Spring profile when structured JSON logs are needed by a log
+collector.
+
+The GitHub Actions workflow runs on pull requests and pushes to `main`. It:
+
+- runs `./mvnw verify`;
+- uploads the JaCoCo HTML coverage report and CycloneDX SBOM as build artifacts;
+- builds the Docker image; and
+- starts that image and waits for `/actuator/health` to pass.
+
+The test suite includes detector and scoring unit tests, MockMvc API tests,
+rate-limit and observability tests, and a PostgreSQL repository integration test
+with Testcontainers. The Testcontainers test skips gracefully when a
+Docker-compatible runtime is unavailable locally and runs against real
+PostgreSQL in CI.
 
 ## Example requests
 
@@ -212,11 +390,11 @@ fidelity.
 
 ## Future work
 
-Deliberately out of scope for this first cut (detection core + API first):
+Next steps that build on the production-style foundation:
 
-- **Auth** — no authentication/authorization yet
-- **Persistence** — no database; scans are stateless
-- **Docker** — no container image yet
-- **Richer CSS resolution** — full cascade/specificity, `@media`, external stylesheets
-- **Configurable rules** — the injection rule set is injectable but not yet externalized to config
-- **Rate limiting / observability** — no metrics, tracing, or throttling
+- **Rendered scan mode** - use a sandboxed browser for computed styles and JavaScript-generated DOM.
+- **Configurable rules** - externalize detection rules with versioning and reviewable change control.
+- **Retention and deletion** - make audit retention and subject erasure configurable for each deployment.
+- **Deployment infrastructure** - add Terraform and a managed production environment with secret management.
+- **Adversarial evaluation corpus** - track precision, recall, and false positives over labelled examples.
+- **Asynchronous bulk scanning** - add queued jobs only when a real bulk-scan workflow demands it.
