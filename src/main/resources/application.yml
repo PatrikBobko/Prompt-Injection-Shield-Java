@@ -43,6 +43,11 @@ management:
       probes:
         enabled: true
       show-details: never
+  health:
+    redis:
+      # Local runs use the in-memory rate limiter and have no Redis to ping;
+      # the prod profile turns this back on where Redis is a real dependency.
+      enabled: false
   metrics:
     tags:
       application: ${spring.application.name}

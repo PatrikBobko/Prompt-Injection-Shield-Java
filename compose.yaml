@@ -80,11 +80,14 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
+    # Run directly as the image's redis user: the sh wrapper bypasses the
+    # entrypoint's privilege drop, and root with cap_drop ALL cannot write the
+    # redis-owned /data. Persistence stays off because this instance only holds
+    # transient rate-limit windows.
+    user: "999:1000"
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-dev-password}
-    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
-    volumes:
-      - redis-data:/data
+    command: ["sh", "-c", "exec redis-server --save '' --appendonly no --requirepass \"$$REDIS_PASSWORD\""]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 10s
@@ -183,6 +186,5 @@ networks:
 
 volumes:
   postgres-data:
-  redis-data:
   prometheus-data:
   grafana-data:

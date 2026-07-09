@@ -18,6 +18,12 @@ spring:
           audiences:
             - promptshield-api
 
+management:
+  health:
+    redis:
+      # The deployed stack rate limits through Redis, so readiness must track it.
+      enabled: true
+
 app:
   audit:
     fingerprint-key: ${APP_AUDIT_FINGERPRINT_KEY}
