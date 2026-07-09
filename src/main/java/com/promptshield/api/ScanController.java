@@ -1,9 +1,16 @@
 package com.promptshield.api;
 
+import com.promptshield.audit.CurrentAuditSubject;
+import com.promptshield.audit.dto.ScanAuditSummary;
+import com.promptshield.audit.service.AuditHistoryService;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import com.promptshield.domain.RiskReport;
 import com.promptshield.domain.ScanRequest;
 import com.promptshield.service.DetectionService;
 import jakarta.validation.Valid;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -20,9 +27,15 @@ import java.util.Map;
 public class ScanController {
 
     private final DetectionService detectionService;
+    private final AuditHistoryService auditHistoryService;
+    private final CurrentAuditSubject currentAuditSubject;
 
-    public ScanController(DetectionService detectionService) {
+    public ScanController(DetectionService detectionService,
+                          AuditHistoryService auditHistoryService,
+                          CurrentAuditSubject currentAuditSubject) {
         this.detectionService = detectionService;
+        this.auditHistoryService = auditHistoryService;
+        this.currentAuditSubject = currentAuditSubject;
     }
 
     /**
@@ -30,7 +43,16 @@ public class ScanController {
      */
     @PostMapping("/scan")
     public RiskReport scan(@Valid @RequestBody ScanRequest request) {
-        return detectionService.scan(request);
+        RiskReport report = detectionService.scan(request);
+        auditHistoryService.record(request, report, currentAuditSubject.subject());
+        return report;
+    }
+
+    /** Returns audit entries belonging only to the current authenticated subject. */
+    @GetMapping("/scans")
+    public Page<ScanAuditSummary> scans(
+            @PageableDefault(size = 20, sort = "scannedAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return auditHistoryService.recent(currentAuditSubject.subject(), pageable);
     }
 
     /**

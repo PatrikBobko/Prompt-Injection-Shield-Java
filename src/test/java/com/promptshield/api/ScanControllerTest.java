@@ -1,5 +1,7 @@
 package com.promptshield.api;
 
+import com.promptshield.audit.CurrentAuditSubject;
+import com.promptshield.audit.service.AuditHistoryService;
 import com.promptshield.domain.ContentType;
 import com.promptshield.domain.RiskReport;
 import com.promptshield.domain.Severity;
@@ -33,6 +35,12 @@ class ScanControllerTest {
 
     @MockBean
     private DetectionService detectionService;
+
+    @MockBean
+    private AuditHistoryService auditHistoryService;
+
+    @MockBean
+    private CurrentAuditSubject currentAuditSubject;
 
     @Test
     void scanReturnsReport() throws Exception {

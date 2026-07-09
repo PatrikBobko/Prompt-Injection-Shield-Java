@@ -4,6 +4,19 @@ spring:
   jackson:
     # Keep the JSON report tidy: omit null offsets, decoded payloads, etc.
     default-property-inclusion: non_null
+  datasource:
+    # An embedded database keeps ./mvnw spring-boot:run frictionless. Compose
+    # overrides these settings with PostgreSQL for the production-like stack.
+    url: jdbc:h2:mem:promptshield;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
   data:
     redis:
       repositories:
@@ -47,6 +60,9 @@ app:
     max-body-bytes: 8388608
     max-json-string-chars: 2000000
     max-json-nesting-depth: 100
+  audit:
+    # Never use this development fallback outside a local machine.
+    fingerprint-key: ${APP_AUDIT_FINGERPRINT_KEY:local-development-audit-key-change-me}
   security:
     # Compose sets this to true and configures Keycloak. Keep local development
     # and focused tests usable without an identity provider.
