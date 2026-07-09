@@ -67,6 +67,7 @@
     {
       "username": "demo",
       "enabled": true,
+      "email": "demo@promptshield.local",
       "emailVerified": true,
       "firstName": "Demo",
       "lastName": "User",
