@@ -4,11 +4,15 @@ spring:
   jackson:
     # Keep the JSON report tidy: omit null offsets, decoded payloads, etc.
     default-property-inclusion: non_null
+  data:
+    redis:
+      repositories:
+        enabled: false
 
 server:
   port: 8080
-  # Cap request body size: the scanner accepts whole pages, but reject anything
-  # unreasonable up front rather than parsing megabytes of hostile HTML.
+  # Form/swallow limits complement the streaming JSON body filter configured
+  # below; neither setting alone limits arbitrary JSON request bodies.
   tomcat:
     max-http-form-post-size: 4MB
     max-swallow-size: 4MB
@@ -35,3 +39,20 @@ logging:
     com.promptshield: INFO
   pattern:
     console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%X{correlationId}] %logger{36} - %msg%n"
+
+app:
+  request:
+    # 2M Java chars can occupy up to 8 MiB in UTF-8; enforce both byte and
+    # JSON parser limits before ScanRequest validation executes.
+    max-body-bytes: 8388608
+    max-json-string-chars: 2000000
+    max-json-nesting-depth: 100
+  security:
+    # Compose sets this to true and configures Keycloak. Keep local development
+    # and focused tests usable without an identity provider.
+    enabled: ${APP_SECURITY_ENABLED:false}
+  rate-limit:
+    enabled: ${APP_RATE_LIMIT_ENABLED:true}
+    backend: ${APP_RATE_LIMIT_BACKEND:memory}
+    capacity: ${APP_RATE_LIMIT_CAPACITY:60}
+    refill-period: ${APP_RATE_LIMIT_REFILL_PERIOD:1m}
