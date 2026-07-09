@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify with Maven
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Verify
+        run: bash ./mvnw --batch-mode --no-transfer-progress verify
+
+      - name: Upload Maven verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maven-verification-artifacts
+          retention-days: 14
+          path: |
+            target/surefire-reports/
+            target/failsafe-reports/
+            target/site/jacoco/
+            target/bom.json
+            target/bom.xml
+            target/*.jar
+          if-no-files-found: warn
+  container:
+    name: Build and smoke-test container
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          provenance: false
+          tags: prompt-injection-shield-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start container
+        run: docker run --detach --name prompt-injection-shield --publish 8080:8080 prompt-injection-shield-service:ci
+
+      - name: Wait for health endpoint
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://localhost:8080/actuator/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs prompt-injection-shield
+          exit 1
+
+      - name: Stop container
+        if: always()
+        run: docker rm --force prompt-injection-shield || true
+
+  compose-smoke:
+    name: Compose end-to-end smoke test
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Start production-like Compose stack
+        run: docker compose up --build --wait --wait-timeout 300
+
+      - name: Verify protected scan and audit flow
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl --fail --silent --show-error http://127.0.0.1:8080/actuator/health \
+            | jq --exit-status '.status == "UP"'
+
+          unauthenticated_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data '{"content":"<p>release notes</p>","contentType":"HTML"}' \
+            http://127.0.0.1:8080/api/v1/scan)"
+          test "$unauthenticated_status" = "401"
+
+          # Request the token through Keycloak's published URL so its issuer
+          # matches the resource server's public issuer validation.
+          access_token="$(curl --fail --silent --show-error \
+            --request POST \
+            --header 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'grant_type=password' \
+            --data-urlencode 'client_id=promptshield-cli' \
+            --data-urlencode 'username=demo' \
+            --data-urlencode 'password=demo-password-change-me' \
+            http://127.0.0.1:8081/realms/promptshield/protocol/openid-connect/token \
+            | jq --exit-status --raw-output '.access_token')"
+          test -n "$access_token"
+
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $access_token" \
+            --header 'Content-Type: application/json' \
+            --data '{"content":"<p>routine release notes</p>","contentType":"HTML"}' \
+            http://127.0.0.1:8080/api/v1/scan \
+            | jq --exit-status '.contentType == "HTML" and (.riskScore | type == "number")'
+
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $access_token" \
+            http://127.0.0.1:8080/api/v1/scans \
+            | jq --exit-status '(.content | length) == 1 and (.content[0].contentSha256 | test("^[0-9a-f]{64}$"))'
+
+      - name: Collect Compose diagnostics
+        if: always()
+        run: docker compose logs --no-color > compose.log || true
+
+      - name: Upload Compose diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-diagnostics
+          retention-days: 14
+          path: compose.log
+          if-no-files-found: warn
+
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans || true

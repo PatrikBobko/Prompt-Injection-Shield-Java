@@ -75,3 +75,9 @@ src/main/resources/application-local.*
 # ---- Local tool directories ----
 .tooling/
 maven-bootstrap/
+
+# ---- Local working notes / exports ----
+output/
+
+# ---- Local upgrade-assistant artifacts ----
+.github/modernize/

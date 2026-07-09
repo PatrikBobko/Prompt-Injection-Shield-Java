@@ -23,6 +23,8 @@
         <jsoup.version>1.18.1</jsoup.version>
         <springdoc.version>2.6.0</springdoc.version>
         <logstash.logback.version>9.0</logstash.logback.version>
+        <jacoco.version>0.8.12</jacoco.version>
+        <cyclonedx.version>2.9.1</cyclonedx.version>
     </properties>
 
     <dependencies>
@@ -142,6 +144,38 @@
                         <goals>
                             <goal>integration-test</goal>
                             <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+                <version>${cyclonedx.version}</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>makeAggregateBom</goal>
                         </goals>
                     </execution>
                 </executions>
