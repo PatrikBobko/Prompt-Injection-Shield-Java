@@ -15,6 +15,8 @@ import com.promptshield.domain.SeverityCounts;
 import com.promptshield.extract.HtmlSegmentExtractor;
 import com.promptshield.scoring.RiskScorer;
 import com.promptshield.scoring.SeverityScorer;
+import com.promptshield.observability.ScanMetrics;
+import com.promptshield.observability.ScanObservation;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -44,18 +46,31 @@ public class DetectionService {
     private final HtmlSegmentExtractor extractor;
     private final SeverityScorer severityScorer;
     private final RiskScorer riskScorer;
+    private final ScanMetrics scanMetrics;
 
     public DetectionService(List<Detector> detectors,
                             HtmlSegmentExtractor extractor,
                             SeverityScorer severityScorer,
-                            RiskScorer riskScorer) {
+                            RiskScorer riskScorer,
+                            ScanMetrics scanMetrics) {
         this.detectors = List.copyOf(detectors);
         this.extractor = extractor;
         this.severityScorer = severityScorer;
         this.riskScorer = riskScorer;
+        this.scanMetrics = scanMetrics;
     }
 
+    /** Executes one scan while recording only aggregate outcome and latency metrics. */
     public RiskReport scan(ScanRequest request) {
+        try (ScanObservation observation = scanMetrics.startObservation()) {
+            RiskReport report = scanInternal(request);
+            observation.succeed(report);
+            return report;
+        }
+    }
+
+
+    private RiskReport scanInternal(ScanRequest request) {
         ContentType type = request.contentTypeOrDefault();
         List<Segment> segments = switch (type) {
             case HTML -> extractor.extract(request.content());
